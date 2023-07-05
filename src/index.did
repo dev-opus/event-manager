@@ -1,0 +1,88 @@
+type Event = record {
+  id : text;
+  organizer : text;
+  desc : text;
+  name : text;
+  createdAt : nat64;
+  organizerId : text;
+  updatedAt : opt nat64;
+  ticketSold : int32;
+  ticketsAvailable : int32;
+  ticketPrice : float32;
+};
+type EventPayload = record {
+  desc : text;
+  password : text;
+  name : text;
+  organizerId : text;
+  ticketsAvailable : int32;
+  ticketPrice : float32;
+};
+type Ticket = record {
+  id : text;
+  eventId : text;
+  organizer : text;
+  valid : bool;
+  createdAt : nat64;
+  holderId : text;
+  updatedAt : opt nat64;
+  holder : text;
+  price : float32;
+  eventName : text;
+};
+type TicketPayload = record {
+  eventId : text;
+  password : text;
+  holderId : text;
+};
+type TicketTopUpPayload = record {
+  eventId : text;
+  password : text;
+  organizerId : text;
+  amount : int32;
+};
+type User = record {
+  id : text;
+  username : text;
+  balance : float32;
+  password : text;
+  createdAt : nat64;
+  role : text;
+  updatedAt : opt nat64;
+  ticketsPurchased : int32;
+};
+type UserPayload = record { username : text; password : text; role : text };
+type _AzleResult = variant { Ok : Event; Err : text };
+type _AzleResult_1 = variant { Ok : User; Err : text };
+type _AzleResult_2 = variant { Ok : vec Event; Err : text };
+type _AzleResult_3 = variant { Ok : vec Ticket; Err : text };
+type _AzleResult_4 = variant { Ok : Ticket; Err : text };
+type _InlineDeleteEventPayload = record {
+  eventId : text;
+  password : text;
+  organizerId : text;
+};
+type _InlineGetEventPayload = record { eventId : text };
+type _InlineGetTicketsAttendeePayload = record {
+  password : text;
+  attendeeId : text;
+};
+type _InlineTopUpUserBalancePayload = record {
+  userId : text;
+  password : text;
+  amount : float32;
+};
+service : () -> {
+  createEvent : (EventPayload) -> (_AzleResult);
+  createUser : (UserPayload) -> (_AzleResult_1);
+  deleteEvent : (_InlineDeleteEventPayload) -> (_AzleResult);
+  getEvent : (_InlineGetEventPayload) -> (_AzleResult) query;
+  getEvents : () -> (_AzleResult_2) query;
+  getTicketsAttendee : (_InlineGetTicketsAttendeePayload) -> (
+      _AzleResult_3,
+    ) query;
+  getTicketsOrganizer : (_InlineDeleteEventPayload) -> (_AzleResult_3) query;
+  purchaseTicket : (TicketPayload) -> (_AzleResult_4);
+  topUpEventTickets : (TicketTopUpPayload) -> (_AzleResult);
+  topUpUserBalance : (_InlineTopUpUserBalancePayload) -> (_AzleResult_1);
+}

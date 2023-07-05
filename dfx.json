@@ -1,0 +1,12 @@
+{
+  "canisters": {
+    "event_platform": {
+      "type": "custom",
+      "build": "npx azle event_platform",
+      "root": "src",
+      "ts": "src/index.ts",
+      "candid": "src/index.did",
+      "wasm": ".azle/event_platform/event_platform.wasm.gz"
+    }
+  }
+}
