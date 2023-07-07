@@ -17,6 +17,7 @@ import {
   Record,
   Result,
   StableBTreeMap,
+  Principal,
 } from 'azle';
 import { v4 as uuid } from 'uuid';
 
@@ -27,7 +28,6 @@ import { v4 as uuid } from 'uuid';
  */
 
 type User = Record<{
-  id: string;
   role: string;
   balance: float32;
   username: string;
@@ -85,11 +85,17 @@ type TicketPayload = Record<{
 }>;
 
 type TicketTopUpPayload = Record<{
-  organizerId: string;
-  password: string;
   eventId: string;
   amount: int32;
 }>;
+
+
+//Using the Principal ID on the internet computer to login and authenticate is the same way as 
+//how users authenticate with their wallet addresses on other blockchains like ethereum. 
+//It preffered as it provides a more secure and seamless way to login where the user does not have to worry about the password and username of every site you create an account on.
+// all you have to worry about is the password to their wallet address. 
+//from there, thy are able to create accounts on any platform using their wallet address
+
 
 /**
  *
@@ -97,9 +103,11 @@ type TicketTopUpPayload = Record<{
  *
  */
 
-const UserStore = new StableBTreeMap<string, User>(0, 44, 1024);
+
+const UserStore = new StableBTreeMap<Principal, User>(0, 44, 1024);
 const EventStore = new StableBTreeMap<string, Event>(1, 44, 1024);
 const TicketStore = new StableBTreeMap<string, Ticket>(2, 44, 1024);
+
 
 /**
  *
@@ -107,8 +115,12 @@ const TicketStore = new StableBTreeMap<string, Ticket>(2, 44, 1024);
  *
  */
 
+
+
+//create an account. the user cannot use the anonymous Principal ID
 $update;
 export function createUser(payload: UserPayload): Result<User, string> {
+  const caller = ic.caller();
   const { role } = payload;
 
   if (payload.username.trim() === '') {
@@ -119,9 +131,12 @@ export function createUser(payload: UserPayload): Result<User, string> {
     return Result.Err<User, string>('password cannot be empty!');
   }
 
+  if(caller.toString() === "2vxsx-fae"){
+    return Result.Err<User,string>("Anonymous users cannot create accounts.")
+  }
+
   if (role.toLowerCase() == 'attendee' || role.toLowerCase() == 'organizer') {
     const user: User = {
-      id: uuid(),
       ...payload,
       password: payload.password.trim().toLowerCase(),
       createdAt: ic.time(),
@@ -129,7 +144,7 @@ export function createUser(payload: UserPayload): Result<User, string> {
       balance: 0.0,
       ticketsPurchased: 0,
     };
-    UserStore.insert(user.id, user);
+    UserStore.insert(caller, user);
     return Result.Ok<User, string>(user);
   } else {
     return Result.Err<User, string>(
@@ -138,15 +153,14 @@ export function createUser(payload: UserPayload): Result<User, string> {
   }
 }
 
+
+//update the user balance
 $update;
 export function topUpUserBalance(
-  payload: Record<{
-    amount: float32;
-    userId: string;
-    password: string;
-  }>
+    amount: float32
+
 ): Result<User, string> {
-  const { amount, userId, password } = payload;
+  const caller = ic.caller();
 
   if (!amount) {
     return Result.Err<User, string>(
@@ -154,9 +168,9 @@ export function topUpUserBalance(
     );
   }
 
-  return match(UserStore.get(userId), {
+  return match(UserStore.get(caller), {
     Some: (user) => {
-      if (user.password == password.toLowerCase().trim()) {
+
         const newBalance = user.balance + (amount < 0 ? amount * -1 : amount);
 
         const toppedUpUser: User = {
@@ -165,39 +179,30 @@ export function topUpUserBalance(
           balance: newBalance,
         };
 
-        UserStore.insert(user.id, toppedUpUser);
+        UserStore.insert(caller, toppedUpUser);
         return Result.Ok<User, string>(toppedUpUser);
-      } else {
-        return Result.Err<User, string>(
-          `can't top up balance: user credential don't match`
-        );
-      }
     },
     None: () =>
       Result.Err<User, string>(
-        `can't top up balance: no user found for userId=${userId}`
+        `can't top up balance: no user found for userId=${caller.toString()}`
       ),
   });
 }
 
-/**
- *
- * Methods (Event)
- *
- */
 
+//get all events created
 $query;
 export function getEvents(): Result<Vec<Event>, string> {
   const events = EventStore.values();
   return Result.Ok<Vec<Event>, string>(events);
 }
 
+
+//get a specific event
 $query;
 export function getEvent(
-  payload: Record<{ eventId: string }>
+   eventId: string 
 ): Result<Event, string> {
-  const { eventId } = payload;
-
   return match(EventStore.get(eventId), {
     Some: (event) => Result.Ok<Event, string>(event),
     None: () =>
@@ -207,12 +212,14 @@ export function getEvent(
   });
 }
 
+
+//create event by the user with enough priviledges
 $update;
 export function createEvent(payload: EventPayload): Result<Event, string> {
-  const { organizerId, password, ticketPrice, ticketsAvailable } = payload;
-  return match(UserStore.get(organizerId), {
+  const caller = ic.caller();
+  const {ticketPrice, ticketsAvailable } = payload;
+  return match(UserStore.get(caller), {
     Some: (user) => {
-      if (user.password.toLowerCase() == password.toLowerCase()) {
         if (user.role !== 'organizer') {
           return Result.Err<Event, string>(
             `Can't create event: user lack sufficient privillages required!`
@@ -225,37 +232,37 @@ export function createEvent(payload: EventPayload): Result<Event, string> {
           updatedAt: Opt.None,
           ticketSold: 0,
           ...payload,
+          organizerId: caller.toString(),
           ticketPrice: ticketPrice < 0 ? ticketPrice * -1 : ticketPrice,
           ticketsAvailable:
             ticketsAvailable < 0 ? ticketsAvailable * -1 : ticketsAvailable,
         };
         EventStore.insert(event.id, event);
         return Result.Ok<Event, string>(event);
-      } else {
-        return Result.Err<Event, string>(
-          `Can't create event: user credentials don't match`
-        );
-      }
+      
     },
     None: () =>
       Result.Err<Event, string>(
-        `Can't create event: no user found for organizerId=${organizerId}`
+        `Can't create event: no user found for organizerId=${caller.toString()}`
       ),
   });
 }
 
+
+//delete event by its creator
 $update;
 export function deleteEvent(
-  payload: Record<{ eventId: string; password: string; organizerId: string }>
+  eventId: string
 ): Result<Event, string> {
-  const { eventId, organizerId, password } = payload;
+  const caller = ic.caller()
+ 
 
-  return match(UserStore.get(organizerId.trim()), {
+  return match(UserStore.get(caller), {
     Some: (user) => {
-      if (user.password === password.toLowerCase().trim()) {
+
         return match(EventStore.get(eventId.trim()), {
           Some: (event) => {
-            if (event.organizerId === organizerId) {
+            if (event.organizerId === caller.toString()) {
               const tickets: Ticket[] = TicketStore.values();
               for (const ticket of tickets) {
                 if (ticket.eventId === eventId.trim()) {
@@ -281,24 +288,24 @@ export function deleteEvent(
               `can't delete event: event with eventId=${eventId} not found`
             ),
         });
-      } else {
-        return Result.Err<Event, string>(
-          `can't delete event: user credentials don't match!`
-        );
-      }
     },
     None: () =>
       Result.Err<Event, string>(
-        `can't delete event: no user for organizerId=${organizerId}`
+        `can't delete event: no user for organizerId=${caller.toString()}`
       ),
   });
 }
 
+
+
+
+//topup event tickets by the event organizer
 $update;
 export function topUpEventTickets(
   payload: TicketTopUpPayload
 ): Result<Event, string> {
-  const { organizerId, password, eventId, amount } = payload;
+  const {eventId, amount } = payload;
+  const caller = ic.caller()
 
   if (!amount) {
     return Result.Err<Event, string>(
@@ -308,13 +315,12 @@ export function topUpEventTickets(
 
   const toppedAmount = amount < 0 ? amount * -1 : amount;
 
-  return match(UserStore.get(organizerId), {
+  return match(UserStore.get(caller), {
     Some: (user) => {
-      if (user.password == password.toLowerCase()) {
         if (user.role === 'organizer') {
           return match(EventStore.get(eventId), {
             Some: (event) => {
-              if (event.organizerId === organizerId) {
+              if (event.organizerId === caller.toString()) {
                 const topedUpEvent: Event = {
                   ...event,
                   ticketsAvailable: event.ticketsAvailable + toppedAmount,
@@ -338,15 +344,10 @@ export function topUpEventTickets(
             `Can't top up tickets: user lacks sufficient privillages required!`
           );
         }
-      } else {
-        return Result.Err<Event, string>(
-          `Can't top up tickets: user credentials don't match`
-        );
-      }
     },
     None: () =>
       Result.Err<Event, string>(
-        `Can't top up tickets: no user found for organizerId=${organizerId}`
+        `Can't top up tickets: no user found for organizerId=${caller.toString()}`
       ),
   });
 }
@@ -357,20 +358,24 @@ export function topUpEventTickets(
  *
  */
 
-$update;
-export function purchaseTicket(payload: TicketPayload): Result<Ticket, string> {
-  const { eventId, holderId, password } = payload;
 
-  return match(UserStore.get(holderId), {
+//purchase ticket for the event
+$update;
+export function purchaseTicket(eventId: string): Result<Ticket, string> {
+  const caller = ic.caller()
+
+
+  return match(UserStore.get(caller), {
     Some: (user) => {
-      if (user.password == password.trim().toLowerCase()) {
+
         return match(EventStore.get(eventId), {
           Some: (event) => {
             if (user.balance > event.ticketPrice) {
               if (event.ticketsAvailable > 0) {
                 const ticket: Ticket = {
                   id: uuid(),
-                  ...payload,
+                  holderId: caller.toString(),
+                  eventId:eventId,
                   valid: true,
                   eventName: event.name,
                   holder: user.username,
@@ -387,7 +392,7 @@ export function purchaseTicket(payload: TicketPayload): Result<Ticket, string> {
                   ticketsPurchased: user.ticketsPurchased + 1,
                   balance: user.balance - ticket.price,
                 };
-                UserStore.insert(updatedUser.id, updatedUser);
+                UserStore.insert(caller, updatedUser);
 
                 const newAvailableTickets =
                   event.ticketsAvailable - 1 < 0
@@ -418,31 +423,29 @@ export function purchaseTicket(payload: TicketPayload): Result<Ticket, string> {
               `can't purchase ticket: event with eventId=${eventId} not found`
             ),
         });
-      } else {
-        return Result.Err<Ticket, string>(
-          `can't purchase ticket: user credentials don't match`
-        );
-      }
+     
     },
     None: () =>
       Result.Err<Ticket, string>(
-        `can't purchase ticket: user with holderId=${holderId} not found`
+        `can't purchase ticket: user with holderId=${caller.toString()} not found`
       ),
   });
 }
 
+
+//get event organizer
 $query;
 export function getTicketsOrganizer(
-  payload: Record<{ organizerId: string; eventId: string; password: string }>
+   eventId: string
 ): Result<Vec<Ticket>, string> {
-  const { organizerId, eventId, password } = payload;
 
-  return match(UserStore.get(organizerId), {
+  const caller = ic.caller();
+  return match(UserStore.get(caller), {
     Some: (user) => {
-      if (user.password === password.toLowerCase()) {
+  
         return match(EventStore.get(eventId), {
           Some: (event) => {
-            if (event.organizerId === organizerId) {
+            if (event.organizerId === caller.toString()) {
               const tickets: Ticket[] = TicketStore.values();
               const returnedTickets: Vec<Ticket> = [];
 
@@ -463,49 +466,73 @@ export function getTicketsOrganizer(
               `can't list tickets: event with eventId=${eventId} not found`
             ),
         });
-      } else {
-        return Result.Err<Vec<Ticket>, string>(
-          `can't list tickets: user credentials don't match!`
-        );
-      }
+      
     },
     None: () =>
       Result.Err<Vec<Ticket>, string>(
-        `can't list tickets: user not found for organizerId=${organizerId}`
+        `can't list tickets: user not found for organizerId=${caller.toString()}`
       ),
   });
 }
 
+
+//get tickets that belong to the user that has called this function
+// it is equivalent to getting the tickets that belong to the user who supplies the id and their password
 $query;
 export function getTicketsAttendee(
-  payload: Record<{ attendeeId: string; password: string }>
 ): Result<Vec<Ticket>, string> {
-  const { attendeeId, password } = payload;
+  const caller = ic.caller()
 
-  return match(UserStore.get(attendeeId), {
+  return match(UserStore.get(caller), {
     Some: (user) => {
-      if (user.password === password.toLowerCase()) {
+ 
         const tickets: Ticket[] = TicketStore.values();
         const returnedTickets: Vec<Ticket> = [];
 
         for (const ticket of tickets) {
-          if (ticket.holderId === attendeeId) {
+          if (ticket.holderId === caller.toString()) {
             returnedTickets.push(ticket);
           }
         }
         return Result.Ok<Vec<Ticket>, string>(returnedTickets);
-      } else {
-        return Result.Err<Vec<Ticket>, string>(
-          `can't list tickets: user credentials don't match!`
-        );
-      }
     },
     None: () =>
       Result.Err<Vec<Ticket>, string>(
-        `can't list tickets: user not found for attendeeId=${attendeeId}`
+        `can't list tickets: user not found for attendeeId=${caller.toString()}`
       ),
   });
 }
+
+
+
+//reclaim an old account by providing the password associated with it
+$update;
+export function migrateAccount( account : string, password : string): Result<string,string>{
+  const caller = ic.caller();
+  return match(UserStore.get(Principal.fromText(account)),{
+
+    None : ()=>{ return Result.Err<string,string>("This account does not exist")},
+    Some : (oldAccount)=>{
+      if(oldAccount.password === password){
+        UserStore.insert(caller, oldAccount);
+        return Result.Ok<string,string>("Your account details have been restored, you can now login with the current Principal ID")
+      }
+      return Result.Err<string,string>("The passowrds dont match, try again later")
+     }
+  });
+}
+
+//getAccount details
+$query;
+export function getAccountDetails() : Result<User,string>{
+
+  const caller = ic.caller()
+  return match(UserStore.get(caller),{
+    None:() =>{ return Result.Err<User,string>("no account")},
+    Some:(user)=>{ return Result.Ok<User,string>(user)}
+  });
+}
+
 
 /**
  *
