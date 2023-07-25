@@ -507,6 +507,152 @@ export function getTicketsAttendee(
   });
 }
 
+$update;
+export function transferTicketOwnership(
+  payload: Record<{
+    ticketId: string;
+    currentHolderId: string;
+    newHolderId: string;
+    password: string;
+  }>
+): Result<Ticket, string> {
+  const { ticketId, currentHolderId, newHolderId, password } = payload;
+
+  return match(TicketStore.get(ticketId), {
+    Some: (ticket) => {
+      if (ticket.holderId === currentHolderId) {
+        return match(UserStore.get(currentHolderId), {
+          Some: (currentUser) => {
+            if (currentUser.password === password.toLowerCase()) {
+              return match(UserStore.get(newHolderId), {
+                Some: (newUser) => {
+                  const updatedTicket: Ticket = {
+                    ...ticket,
+                    holderId: newUser.id,
+                    holder: newUser.username,
+                    updatedAt: Opt.Some(ic.time()),
+                  };
+                  TicketStore.insert(ticketId, updatedTicket);
+                  return Result.Ok<Ticket, string>(updatedTicket);
+                },
+                None: () =>
+                  Result.Err<Ticket, string>(
+                    `Can't transfer ticket ownership: no user found for newHolderId=${newHolderId}`
+                  ),
+              });
+            } else {
+              return Result.Err<Ticket, string>(
+                `Can't transfer ticket ownership: user credentials don't match`
+              );
+            }
+          },
+          None: () =>
+            Result.Err<Ticket, string>(
+              `Can't transfer ticket ownership: no user found for currentHolderId=${currentHolderId}`
+            ),
+        });
+      } else {
+        return Result.Err<Ticket, string>(
+          `Can't transfer ticket ownership: current holder does not match the ticket's current holder`
+        );
+      }
+    },
+    None: () =>
+      Result.Err<Ticket, string>(
+        `Can't transfer ticket ownership: no ticket found for ticketId=${ticketId}`
+      ),
+  });
+}
+
+$update;
+export function refundTicket(
+  payload: Record<{ ticketId: string; password: string }>
+): Result<User, string> {
+  const { ticketId, password } = payload;
+
+  return match(TicketStore.get(ticketId), {
+    Some: (ticket) => {
+      if (!ticket.valid) {
+        return Result.Err<User, string>(
+          `Can't refund ticket: ticket with ticketId=${ticketId} is already refunded`
+        );
+      }
+
+      return match(UserStore.get(ticket.holderId), {
+        Some: (user) => {
+          if (user.password === password.toLowerCase()) {
+            const newBalance = user.balance + ticket.price;
+
+            const updatedUser: User = {
+              ...user,
+              updatedAt: Opt.Some(ic.time()),
+              balance: newBalance,
+            };
+            UserStore.insert(user.id, updatedUser);
+
+            const refundedTicket: Ticket = {
+              ...ticket,
+              updatedAt: Opt.Some(ic.time()),
+              valid: false,
+            };
+            TicketStore.insert(ticketId, refundedTicket);
+
+            return Result.Ok<User, string>(updatedUser);
+          } else {
+            return Result.Err<User, string>(
+              `Can't refund ticket: user credentials don't match`
+            );
+          }
+        },
+        None: () =>
+          Result.Err<User, string>(
+            `Can't refund ticket: no user found for ticket holderId=${ticket.holderId}`
+          ),
+      });
+    },
+    None: () =>
+      Result.Err<User, string>(
+        `Can't refund ticket: no ticket found for ticketId=${ticketId}`
+      ),
+  });
+}
+
+export function searchEvents(
+  payload: Record<{
+    eventName?: string;
+    organizer?: string;
+    date?: string;
+    location?: string;
+  }>
+): Event[] {
+  const { eventName, organizer, date, location } = payload;
+  const allEvents = EventStore.getValues();
+
+  const filteredEvents = allEvents.filter((event) => {
+    let isMatch = true;
+
+    if (eventName && !event.name.toLowerCase().includes(eventName.toLowerCase())) {
+      isMatch = false;
+    }
+
+    if (organizer && !event.organizer.toLowerCase().includes(organizer.toLowerCase())) {
+      isMatch = false;
+    }
+
+    if (date && !event.date.toLowerCase().includes(date.toLowerCase())) {
+      isMatch = false;
+    }
+
+    if (location && !event.location.toLowerCase().includes(location.toLowerCase())) {
+      isMatch = false;
+    }
+
+    return isMatch;
+  });
+
+  return filteredEvents;
+}
+
 /**
  *
  * WorkArounds
